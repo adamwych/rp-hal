@@ -541,10 +541,11 @@ impl<SM: ValidStateMachine> UninitStateMachine<SM> {
 }
 
 /// PIO State Machine with an associated program.
-pub struct StateMachine<SM: ValidStateMachine, State> {
+pub struct StateMachine<SM: ValidStateMachine, State, WordSize> {
     sm: UninitStateMachine<SM>,
     program: InstalledProgram<SM::PIO>,
     _phantom: core::marker::PhantomData<State>,
+    _word_size: core::marker::PhantomData<WordSize>,
 }
 
 /// Marker for an initialized, but stopped state machine.
@@ -570,7 +571,7 @@ impl PioIRQ {
     }
 }
 
-impl<SM: ValidStateMachine, State> StateMachine<SM, State> {
+impl<SM: ValidStateMachine, State, WordSize> StateMachine<SM, State, WordSize> {
     /// Stops the state machine if it is still running and returns its program.
     ///
     /// The program can be uninstalled to free space once it is no longer used by any state
@@ -578,7 +579,7 @@ impl<SM: ValidStateMachine, State> StateMachine<SM, State> {
     pub fn uninit(
         mut self,
         _rx: Rx<SM>,
-        _tx: Tx<SM>,
+        _tx: Tx<SM, WordSize>,
     ) -> (UninitStateMachine<SM>, InstalledProgram<SM::PIO>) {
         self.sm.set_enabled(false);
         (self.sm, self.program)
@@ -698,13 +699,16 @@ impl<SM: ValidStateMachine, State> StateMachine<SM, State> {
 }
 
 // Safety: All shared register accesses are atomic.
-unsafe impl<SM: ValidStateMachine + Send, State> Send for StateMachine<SM, State> {}
+unsafe impl<SM: ValidStateMachine + Send, State, WordSize> Send
+    for StateMachine<SM, State, WordSize>
+{
+}
 
 // Safety: `StateMachine` is marked Send so ensure all accesses remain atomic and no new concurrent
 // accesses are added.
-impl<SM: ValidStateMachine> StateMachine<SM, Stopped> {
+impl<SM: ValidStateMachine, WordSize> StateMachine<SM, Stopped, WordSize> {
     /// Starts execution of the selected program.
-    pub fn start(mut self) -> StateMachine<SM, Running> {
+    pub fn start(mut self) -> StateMachine<SM, Running, WordSize> {
         // Enable SM
         self.sm.set_enabled(true);
 
@@ -712,6 +716,7 @@ impl<SM: ValidStateMachine> StateMachine<SM, Stopped> {
             sm: self.sm,
             program: self.program,
             _phantom: core::marker::PhantomData,
+            _word_size: core::marker::PhantomData,
         }
     }
 
@@ -820,7 +825,7 @@ impl<SM: ValidStateMachine> StateMachine<SM, Stopped> {
     }
 }
 
-impl<P: PIOExt, SM: StateMachineIndex> StateMachine<(P, SM), Stopped> {
+impl<P: PIOExt, SM: StateMachineIndex, WordSize> StateMachine<(P, SM), Stopped, WordSize> {
     /// Restarts the clock dividers for the specified state machines.
     ///
     /// As a result, the clock will be synchronous for the state machines, which is a precondition
@@ -836,19 +841,19 @@ impl<P: PIOExt, SM: StateMachineIndex> StateMachine<(P, SM), Stopped> {
     /// ```
     pub fn synchronize_with<'sm, SM2: StateMachineIndex>(
         &'sm mut self,
-        _other_sm: &'sm mut StateMachine<(P, SM2), Stopped>,
-    ) -> Synchronize<'sm, (P, SM)> {
+        _other_sm: &'sm mut StateMachine<(P, SM2), Stopped, WordSize>,
+    ) -> Synchronize<'sm, (P, SM), WordSize> {
         let sm_mask = (1 << SM::id()) | (1 << SM2::id());
         Synchronize { sm: self, sm_mask }
     }
 }
 
-impl<P: PIOExt, SM: StateMachineIndex, State> StateMachine<(P, SM), State> {
+impl<P: PIOExt, SM: StateMachineIndex, State, WordSize> StateMachine<(P, SM), State, WordSize> {
     /// Create a group of state machines, which can be started/stopped synchronously
     pub fn with<SM2: StateMachineIndex>(
         self,
-        other_sm: StateMachine<(P, SM2), State>,
-    ) -> StateMachineGroup2<P, SM, SM2, State> {
+        other_sm: StateMachine<(P, SM2), State, WordSize>,
+    ) -> StateMachineGroup2<P, SM, SM2, State, WordSize> {
         StateMachineGroup2 {
             sm1: self,
             sm2: other_sm,
@@ -862,9 +867,10 @@ pub struct StateMachineGroup2<
     SM1Idx: StateMachineIndex,
     SM2Idx: StateMachineIndex,
     State,
+    WordSize,
 > {
-    sm1: StateMachine<(P, SM1Idx), State>,
-    sm2: StateMachine<(P, SM2Idx), State>,
+    sm1: StateMachine<(P, SM1Idx), State, WordSize>,
+    sm2: StateMachine<(P, SM2Idx), State, WordSize>,
 }
 
 /// Group of 3 state machines, which can be started/stopped synchronously.
@@ -874,10 +880,11 @@ pub struct StateMachineGroup3<
     SM2Idx: StateMachineIndex,
     SM3Idx: StateMachineIndex,
     State,
+    WordSize,
 > {
-    sm1: StateMachine<(P, SM1Idx), State>,
-    sm2: StateMachine<(P, SM2Idx), State>,
-    sm3: StateMachine<(P, SM3Idx), State>,
+    sm1: StateMachine<(P, SM1Idx), State, WordSize>,
+    sm2: StateMachine<(P, SM2Idx), State, WordSize>,
+    sm3: StateMachine<(P, SM3Idx), State, WordSize>,
 }
 
 /// Group of 4 state machines, which can be started/stopped synchronously.
@@ -888,23 +895,24 @@ pub struct StateMachineGroup4<
     SM3Idx: StateMachineIndex,
     SM4Idx: StateMachineIndex,
     State,
+    WordSize,
 > {
-    sm1: StateMachine<(P, SM1Idx), State>,
-    sm2: StateMachine<(P, SM2Idx), State>,
-    sm3: StateMachine<(P, SM3Idx), State>,
-    sm4: StateMachine<(P, SM4Idx), State>,
+    sm1: StateMachine<(P, SM1Idx), State, WordSize>,
+    sm2: StateMachine<(P, SM2Idx), State, WordSize>,
+    sm3: StateMachine<(P, SM3Idx), State, WordSize>,
+    sm4: StateMachine<(P, SM4Idx), State, WordSize>,
 }
 
-impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex, State>
-    StateMachineGroup2<P, SM1Idx, SM2Idx, State>
+impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex, State, WordSize>
+    StateMachineGroup2<P, SM1Idx, SM2Idx, State, WordSize>
 {
     /// Split the group, releasing the contained state machines
     #[allow(clippy::type_complexity)]
     pub fn free(
         self,
     ) -> (
-        StateMachine<(P, SM1Idx), State>,
-        StateMachine<(P, SM2Idx), State>,
+        StateMachine<(P, SM1Idx), State, WordSize>,
+        StateMachine<(P, SM2Idx), State, WordSize>,
     ) {
         (self.sm1, self.sm2)
     }
@@ -912,8 +920,8 @@ impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex, State>
     /// Add another state machine to the group
     pub fn with<SM3Idx: StateMachineIndex>(
         self,
-        other_sm: StateMachine<(P, SM3Idx), State>,
-    ) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, State> {
+        other_sm: StateMachine<(P, SM3Idx), State, WordSize>,
+    ) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, State, WordSize> {
         StateMachineGroup3 {
             sm1: self.sm1,
             sm2: self.sm2,
@@ -932,16 +940,17 @@ impl<
         SM2Idx: StateMachineIndex,
         SM3Idx: StateMachineIndex,
         State,
-    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, State>
+        WordSize,
+    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, State, WordSize>
 {
     /// Split the group, releasing the contained state machines
     #[allow(clippy::type_complexity)]
     pub fn free(
         self,
     ) -> (
-        StateMachine<(P, SM1Idx), State>,
-        StateMachine<(P, SM2Idx), State>,
-        StateMachine<(P, SM3Idx), State>,
+        StateMachine<(P, SM1Idx), State, WordSize>,
+        StateMachine<(P, SM2Idx), State, WordSize>,
+        StateMachine<(P, SM3Idx), State, WordSize>,
     ) {
         (self.sm1, self.sm2, self.sm3)
     }
@@ -949,8 +958,8 @@ impl<
     /// Add another state machine to the group
     pub fn with<SM4Idx: StateMachineIndex>(
         self,
-        other_sm: StateMachine<(P, SM4Idx), State>,
-    ) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, State> {
+        other_sm: StateMachine<(P, SM4Idx), State, WordSize>,
+    ) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, State, WordSize> {
         StateMachineGroup4 {
             sm1: self.sm1,
             sm2: self.sm2,
@@ -971,17 +980,18 @@ impl<
         SM3Idx: StateMachineIndex,
         SM4Idx: StateMachineIndex,
         State,
-    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, State>
+        WordSize,
+    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, State, WordSize>
 {
     /// Split the group, releasing the contained state machines
     #[allow(clippy::type_complexity)]
     pub fn free(
         self,
     ) -> (
-        StateMachine<(P, SM1Idx), State>,
-        StateMachine<(P, SM2Idx), State>,
-        StateMachine<(P, SM3Idx), State>,
-        StateMachine<(P, SM4Idx), State>,
+        StateMachine<(P, SM1Idx), State, WordSize>,
+        StateMachine<(P, SM2Idx), State, WordSize>,
+        StateMachine<(P, SM3Idx), State, WordSize>,
+        StateMachine<(P, SM4Idx), State, WordSize>,
     ) {
         (self.sm1, self.sm2, self.sm3, self.sm4)
     }
@@ -991,22 +1001,24 @@ impl<
     }
 }
 
-impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex>
-    StateMachineGroup2<P, SM1Idx, SM2Idx, Stopped>
+impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex, WordSize>
+    StateMachineGroup2<P, SM1Idx, SM2Idx, Stopped, WordSize>
 {
     /// Start grouped state machines
-    pub fn start(mut self) -> StateMachineGroup2<P, SM1Idx, SM2Idx, Running> {
+    pub fn start(mut self) -> StateMachineGroup2<P, SM1Idx, SM2Idx, Running, WordSize> {
         self.sm1.sm.set_ctrl_bits(self.mask());
         StateMachineGroup2 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1023,26 +1035,30 @@ impl<
         SM1Idx: StateMachineIndex,
         SM2Idx: StateMachineIndex,
         SM3Idx: StateMachineIndex,
-    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Stopped>
+        WordSize,
+    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Stopped, WordSize>
 {
     /// Start grouped state machines
-    pub fn start(mut self) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Running> {
+    pub fn start(mut self) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Running, WordSize> {
         self.sm1.sm.set_ctrl_bits(self.mask());
         StateMachineGroup3 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm3: StateMachine {
                 sm: self.sm3.sm,
                 program: self.sm3.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1060,31 +1076,38 @@ impl<
         SM2Idx: StateMachineIndex,
         SM3Idx: StateMachineIndex,
         SM4Idx: StateMachineIndex,
-    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Stopped>
+        WordSize,
+    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Stopped, WordSize>
 {
     /// Start grouped state machines
-    pub fn start(mut self) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Running> {
+    pub fn start(
+        mut self,
+    ) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Running, WordSize> {
         self.sm1.sm.set_ctrl_bits(self.mask());
         StateMachineGroup4 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm3: StateMachine {
                 sm: self.sm3.sm,
                 program: self.sm3.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm4: StateMachine {
                 sm: self.sm4.sm,
                 program: self.sm4.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1096,22 +1119,24 @@ impl<
     }
 }
 
-impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex>
-    StateMachineGroup2<P, SM1Idx, SM2Idx, Running>
+impl<P: PIOExt, SM1Idx: StateMachineIndex, SM2Idx: StateMachineIndex, WordSize>
+    StateMachineGroup2<P, SM1Idx, SM2Idx, Running, WordSize>
 {
     /// Stop grouped state machines
-    pub fn stop(mut self) -> StateMachineGroup2<P, SM1Idx, SM2Idx, Stopped> {
+    pub fn stop(mut self) -> StateMachineGroup2<P, SM1Idx, SM2Idx, Stopped, WordSize> {
         self.sm1.sm.clear_ctrl_bits(self.mask());
         StateMachineGroup2 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1122,26 +1147,30 @@ impl<
         SM1Idx: StateMachineIndex,
         SM2Idx: StateMachineIndex,
         SM3Idx: StateMachineIndex,
-    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Running>
+        WordSize,
+    > StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Running, WordSize>
 {
     /// Stop grouped state machines
-    pub fn stop(mut self) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Stopped> {
+    pub fn stop(mut self) -> StateMachineGroup3<P, SM1Idx, SM2Idx, SM3Idx, Stopped, WordSize> {
         self.sm1.sm.clear_ctrl_bits(self.mask());
         StateMachineGroup3 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm3: StateMachine {
                 sm: self.sm3.sm,
                 program: self.sm3.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1153,31 +1182,38 @@ impl<
         SM2Idx: StateMachineIndex,
         SM3Idx: StateMachineIndex,
         SM4Idx: StateMachineIndex,
-    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Running>
+        WordSize,
+    > StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Running, WordSize>
 {
     /// Stop grouped state machines
-    pub fn stop(mut self) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Stopped> {
+    pub fn stop(
+        mut self,
+    ) -> StateMachineGroup4<P, SM1Idx, SM2Idx, SM3Idx, SM4Idx, Stopped, WordSize> {
         self.sm1.sm.clear_ctrl_bits(self.mask());
         StateMachineGroup4 {
             sm1: StateMachine {
                 sm: self.sm1.sm,
                 program: self.sm1.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm2: StateMachine {
                 sm: self.sm2.sm,
                 program: self.sm2.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm3: StateMachine {
                 sm: self.sm3.sm,
                 program: self.sm3.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             sm4: StateMachine {
                 sm: self.sm4.sm,
                 program: self.sm4.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
         }
     }
@@ -1191,16 +1227,16 @@ impl<
 
 /// Type which, once destructed, restarts the clock dividers for all selected state machines,
 /// effectively synchronizing them.
-pub struct Synchronize<'sm, SM: ValidStateMachine> {
-    sm: &'sm mut StateMachine<SM, Stopped>,
+pub struct Synchronize<'sm, SM: ValidStateMachine, WordSize> {
+    sm: &'sm mut StateMachine<SM, Stopped, WordSize>,
     sm_mask: u32,
 }
 
-impl<'sm, P: PIOExt, SM: StateMachineIndex> Synchronize<'sm, (P, SM)> {
+impl<'sm, P: PIOExt, SM: StateMachineIndex, WordSize> Synchronize<'sm, (P, SM), WordSize> {
     /// Adds another state machine to be synchronized.
     pub fn and_with<SM2: StateMachineIndex>(
         mut self,
-        _other_sm: &'sm mut StateMachine<(P, SM2), Stopped>,
+        _other_sm: &'sm mut StateMachine<(P, SM2), Stopped, WordSize>,
     ) -> Self {
         // Add another state machine index to the mask.
         self.sm_mask |= 1 << SM2::id();
@@ -1208,7 +1244,7 @@ impl<'sm, P: PIOExt, SM: StateMachineIndex> Synchronize<'sm, (P, SM)> {
     }
 }
 
-impl<'sm, SM: ValidStateMachine> Drop for Synchronize<'sm, SM> {
+impl<'sm, SM: ValidStateMachine, WordSize> Drop for Synchronize<'sm, SM, WordSize> {
     fn drop(&mut self) {
         // Restart the clocks of all state machines specified by the mask.
         // Bits 11:8 of CTRL contain CLKDIV_RESTART.
@@ -1217,9 +1253,9 @@ impl<'sm, SM: ValidStateMachine> Drop for Synchronize<'sm, SM> {
     }
 }
 
-impl<SM: ValidStateMachine> StateMachine<SM, Running> {
+impl<SM: ValidStateMachine, WordSize> StateMachine<SM, Running, WordSize> {
     /// Stops execution of the selected program.
-    pub fn stop(mut self) -> StateMachine<SM, Stopped> {
+    pub fn stop(mut self) -> StateMachine<SM, Stopped, WordSize> {
         // Enable SM
         self.sm.set_enabled(false);
 
@@ -1227,6 +1263,7 @@ impl<SM: ValidStateMachine> StateMachine<SM, Running> {
             sm: self.sm,
             program: self.program,
             _phantom: core::marker::PhantomData,
+            _word_size: core::marker::PhantomData,
         }
     }
 
@@ -1409,17 +1446,18 @@ impl<SM: ValidStateMachine> ReadTarget for Rx<SM> {
 impl<SM: ValidStateMachine> EndlessReadTarget for Rx<SM> {}
 
 /// PIO TX FIFO handle.
-pub struct Tx<SM: ValidStateMachine> {
+pub struct Tx<SM: ValidStateMachine, WordSize> {
     block: *const rp2040_pac::pio0::RegisterBlock,
     _phantom: core::marker::PhantomData<SM>,
+    _word_size: core::marker::PhantomData<WordSize>,
 }
 
 // Safety: All shared register accesses are atomic.
-unsafe impl<SM: ValidStateMachine + Send> Send for Tx<SM> {}
+unsafe impl<SM: ValidStateMachine + Send, WordSize> Send for Tx<SM, WordSize> {}
 
 // Safety: `Tx` is marked Send so ensure all accesses remain atomic and no new concurrent accesses
 // are added.
-impl<SM: ValidStateMachine> Tx<SM> {
+impl<SM: ValidStateMachine, WordSize> Tx<SM, WordSize> {
     unsafe fn block(&self) -> &pac::pio0::RegisterBlock {
         &*self.block
     }
@@ -1579,8 +1617,8 @@ impl<SM: ValidStateMachine> Tx<SM> {
     }
 }
 
-impl<SM: ValidStateMachine> WriteTarget for Tx<SM> {
-    type TransmittedWord = u32;
+impl<SM: ValidStateMachine, WordSize> WriteTarget for Tx<SM, WordSize> {
+    type TransmittedWord = WordSize;
 
     fn tx_treq() -> Option<u8> {
         Some(SM::tx_dreq())
@@ -1598,7 +1636,7 @@ impl<SM: ValidStateMachine> WriteTarget for Tx<SM> {
     }
 }
 
-impl<SM: ValidStateMachine> EndlessWriteTarget for Tx<SM> {}
+impl<SM: ValidStateMachine, WordSize> EndlessWriteTarget for Tx<SM, WordSize> {}
 
 /// PIO Interrupt controller.
 #[derive(Debug)]
@@ -1837,7 +1875,7 @@ impl ShiftDirection {
 /// Builder to deploy a fully configured PIO program on one of the state
 /// machines.
 #[derive(Debug)]
-pub struct PIOBuilder<P> {
+pub struct PIOBuilder<P, WordSize> {
     /// Clock divisor.
     clock_divisor: (u16, u8),
 
@@ -1883,6 +1921,8 @@ pub struct PIOBuilder<P> {
     set_base: u8,
     /// The first pin that is affected by `OUT PINS`, `OUT PINDIRS` or `MOV PINS` instructions.
     out_base: u8,
+
+    _word_size: core::marker::PhantomData<WordSize>,
 }
 
 /// Buffer sharing configuration.
@@ -1903,7 +1943,7 @@ pub enum InstallError {
     NoSpace,
 }
 
-impl<P: PIOExt> PIOBuilder<P> {
+impl<P: PIOExt, WordSize> PIOBuilder<P, WordSize> {
     /// Set config settings based on information from the given [`pio::Program`].
     /// Additional configuration may be needed in addition to this.
     pub fn from_program(p: InstalledProgram<P>) -> Self {
@@ -1927,6 +1967,7 @@ impl<P: PIOExt> PIOBuilder<P> {
             side_set_base: 0,
             set_base: 0,
             out_base: 0,
+            _word_size: core::marker::PhantomData,
         }
     }
 
@@ -2091,7 +2132,11 @@ impl<P: PIOExt> PIOBuilder<P> {
     pub fn build<SM: StateMachineIndex>(
         self,
         mut sm: UninitStateMachine<(P, SM)>,
-    ) -> (StateMachine<(P, SM), Stopped>, Rx<(P, SM)>, Tx<(P, SM)>) {
+    ) -> (
+        StateMachine<(P, SM), Stopped, WordSize>,
+        Rx<(P, SM)>,
+        Tx<(P, SM), WordSize>,
+    ) {
         let offset = self.program.offset;
 
         // Stop the SM
@@ -2188,12 +2233,14 @@ impl<P: PIOExt> PIOBuilder<P> {
         let tx = Tx {
             block: sm.block,
             _phantom: core::marker::PhantomData,
+            _word_size: core::marker::PhantomData,
         };
         (
             StateMachine {
                 sm,
                 program: self.program,
                 _phantom: core::marker::PhantomData,
+                _word_size: core::marker::PhantomData,
             },
             rx,
             tx,
